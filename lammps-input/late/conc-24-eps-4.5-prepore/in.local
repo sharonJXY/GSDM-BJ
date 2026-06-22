@@ -1,0 +1,68 @@
+units           lj
+atom_style      molecular
+
+dimension       2
+processors      * * 1   # set the number of MPI processors in Lz direction to 1
+read_data       in.data
+
+group           gsdm       type 1:7
+group           gsdmp     type 2:7
+
+#########################################################
+# membrane parameters
+#########################################################
+# bead size
+variable        sigma        equal    1.00
+
+#########################################################
+# non-bonded interactions
+#########################################################
+variable        rc_global    equal    2.6
+pair_style      hybrid/overlay    wf/cut ${rc_global}    cosine/squared    ${rc_global}
+
+# volume exclusion between protein beads 3,4,5,6:
+variable        eps_pp            equal    2
+variable        sigma_pp          equal   ${sigma}
+
+# wf/cut for patch-patch attraction
+variable        eps_pat        equal    4.50
+
+pair_coeff      *      *    wf/cut 0.0 1.0 1 1 5.0
+pair_coeff      * * cosine/squared 0.0 1.0 1.0 wca
+pair_coeff      1 1 cosine/squared ${eps_pp} ${sigma_pp} ${sigma_pp} wca
+pair_coeff      2 3 wf/cut ${eps_pat} 0.14 1 -1 0.68
+pair_coeff      4 5 wf/cut ${eps_pat} 0.14 1 -1 0.68
+pair_coeff      6 7 wf/cut ${eps_pat} 0.14 1 -1 0.68
+
+pair_modify                     shift yes
+
+# Reduce the delay from default 10 to 1 to get rid of dangeours builds
+neigh_modify    exclude molecule/intra gsdm
+neigh_modify    every 1 delay 0 page 200000 one 20000
+
+special_bonds lj 1 1 1 angle yes
+comm_modify     cutoff 10
+
+######################## INTEGRATORS ###########################
+fix 1 gsdm rigid/nve molecule
+fix             fLANG       all    langevin 1.0 1.0 1 1234 zero yes
+fix 2 all enforce2d
+
+thermo_style    custom step temp press etotal epair xhi yhi zhi
+restart 10000       restart1.dat     restart2.dat
+
+dump                    coords all custom 10000 output.xyz id mol type x y z ix iy iz
+dump_modify     coords sort id
+
+#compute d gsdmp pair/local dist
+#compute atomid gsdmp property/local patom1 patom2 ptype1 ptype2
+#dump  distances all local 20000 dist_pe.dat c_atomid[1] c_atomid[2] c_atomid[3] c_atomid[4] c_d
+#compute patche gsdmp pe/atom pair
+#fix 3 gsdmp ave/atom 1 1000 20000 c_patche
+#dump patchenergy gsdmp custom 20000 patchE.dat id mol type f_3
+
+timestep       0.01
+thermo         20000
+minimize 1.0e-4 1.0e-6 100 1000
+run    10000000
+

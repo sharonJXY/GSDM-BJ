@@ -1,0 +1,126 @@
+units           lj
+atom_style      hybrid molecular ellipsoid
+
+dimension       3
+boundary        p p s
+processors      * * 1   # set the number of MPI processors in Lz direction to 1
+read_data       withbonds.config 
+
+group           memb      type 1
+group           gsdm       type 2:9
+group           gsdmp     type 2:7
+
+bond_style  harmonic
+
+#########################################################
+# membrane parameters
+#########################################################
+variable        sigma        equal    1.50
+variable        rc_global    equal    2.6*${sigma}
+variable        rc           equal    2.6*${sigma}
+variable        rmin         equal    1.12246*${sigma}
+variable        mu           equal    10 
+variable        zeta         equal    5
+variable        eps          equal    6.66
+variable        eps2          equal   6.66
+variable        sin_theta0    equal    0
+
+#########################################################
+# non-bonded interactions
+#########################################################
+pair_style      hybrid/overlay  ylz     ${rc_global}  wf/cut ${rc_global} cosine/squared ${rc_global}
+
+# volex ylz at rmin ---- membrane head 1 with protein hydrophilic, protein-protein
+variable        sigma_p              equal    ${sigma}/1.5
+variable        sigma_mp             equal    (${sigma}+${sigma_p})/2
+variable        eps_volex            equal    2
+variable        rc2           equal    ${rc}/${sigma_mp}
+
+# wf/cut for patch-patch attraction
+variable        eps_pat        equal    5 
+
+pair_coeff      *      *    wf/cut 0.0 1.0 1 1 2.0
+pair_coeff      * * cosine/squared 0.0 1.0 1.0 wca
+#pair_coeff   *  *   ylz 0.0  1.0  ${zeta}     ${mu}  ${sin_theta0}   ${rc}
+pair_coeff  1      1        ylz     ${eps}        ${sigma}       ${zeta}     ${mu}  ${sin_theta0}   ${rc}
+pair_coeff  8*9      8*9        cosine/squared    ${eps_volex}    ${sigma_p}    ${sigma_p}    wca
+pair_coeff  1      8*9        ylz     ${eps}        ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+pair_coeff      2 3 wf/cut ${eps_pat} 0.14 1 -1 0.68
+pair_coeff      4 5 wf/cut ${eps_pat} 0.14 1 -1 0.68
+pair_coeff      6 7 wf/cut ${eps_pat} 0.14 1 -1 0.68
+
+pair_modify                     shift yes
+
+# Reduce the delay from default 10 to 2 to get rid of dangeours builds
+neigh_modify    exclude molecule/intra gsdm
+neigh_modify    delay 0 page 200000 one 20000
+
+special_bonds lj 1 1 1 angle yes
+comm_modify     cutoff 10 
+
+variable       dofsub      equal "count(memb)"
+compute           cT          all    temp/asphere
+compute_modify cT extra  ${dofsub}
+compute cP all pressure cT
+variable tem equal c_cT
+variable Pr equal c_cP
+
+######################## INTEGRATORS ###########################
+fix             fLANG       all    langevin 1.0 1.0 1 10000 zero yes angmom no omega no
+fix fNPH memb   nph/asphere x 0.001 0.001 10 y 0.001 0.001 10 couple xy  dilate all ptemp 1.0
+fix_modify  fNPH        temp cT press cP
+fix 2 gsdm setforce 0.0 0.0 0.0
+
+thermo 20000
+thermo_style    custom step pe ke etotal xhi yhi zhi
+thermo_modify temp cT flush yes
+restart 10000       restart1.dat     restart2.dat
+
+bond_coeff  1  5000  0.41049570484880754
+minimize 0.0 1.0e-2 50 100
+
+timestep       0.01
+run            20000
+write_data     lastconfig.addmemb
+
+unfix 2
+unfix fNPH
+
+fix 1 gsdm rigid/nve molecule
+fix fNPH memb   nph/asphere x 0.001 0.001 10 y 0.001 0.001 10 couple xy  dilate all ptemp 1.0
+fix_modify  fNPH        temp cT press cP
+
+dump                    coords all custom 10000 output.xyz id mol type x y z ix iy iz
+dump_modify     coords sort id
+
+# slowly remove restraint
+pair_coeff  1      8*9        ylz     ${eps}       ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+bond_coeff  1  1000  0.41049570484880754
+run            10000
+bond_coeff  1  100  0.41049570484880754
+run            10000
+bond_coeff  1  10  0.41049570484880754
+run            10000
+bond_coeff  1  1  0.41049570484880754
+run            10000
+bond_coeff  1  0.1  0.41049570484880754
+run            10000
+write_data     lastconfig.prepore
+
+# slowly switch to pore state
+delete_bonds all multi
+pair_coeff  1      8        cosine/squared    ${eps_volex}    ${sigma_mp}    ${sigma_mp}    wca
+pair_coeff  1      8        ylz     5.0       ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+run            10000
+pair_coeff  1      8        ylz     4.0       ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+run            10000
+pair_coeff  1      8        ylz     3.0       ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+run            10000
+pair_coeff  1      8        ylz     2.0       ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+run            10000
+pair_coeff  1      8        ylz     1.0       ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+run            10000
+
+# pore state production run
+pair_coeff  1      8        ylz     0.0       ${sigma_mp}       ${zeta}     ${mu}  ${sin_theta0}  ${rc2}
+run            1000000
